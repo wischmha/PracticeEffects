@@ -2,7 +2,7 @@
 title:    "Quantification of Practice Effects in\n\nSelf-Administered Online\n\nCognitive Pre-Screening Tests"
 subtitle: "Structural Equation Modeling (SEM) followed by\n\nGaussian Mixture Modeling (GMM)"
 author:   "Charité - Universitätsmedizin Berlin\n\nInstitute of Public Health\n\nHans-Aloys Wischmann"
-date:     "March 10th, 2026"
+date:     "March 12th, 2026"
 output:   word_document
 ---
 
@@ -60,8 +60,8 @@ The study population has been described in detail elsewhere [Huijbers, 2025, htt
   
   # categorize XpressO scores
   xpresso_raw <- xpresso_raw %>%
-    mutate(xpresso_score_level = case_when(xpresso_score < 42 ~ "Low",
-                                           xpresso_score > 72 ~ "High",
+    mutate(xpresso_score_level = case_when(xpresso_score <= 42 ~ "Low",
+                                           xpresso_score >= 72 ~ "High",
                                            TRUE               ~ "Intermediate")) %>%
     mutate(xpresso_score_level = factor(xpresso_score_level, levels = c("Low", "Intermediate", "High")))
 
