@@ -2,7 +2,7 @@
 title:    "Quantification of Practice Effects in\n\nSelf-Administered Online\n\nCognitive Pre-Screening Tests"
 subtitle: "Structural Equation Modeling (SEM) followed by\n\nGaussian Mixture Modeling (GMM)"
 author:   "Charité - Universitätsmedizin Berlin\n\nInstitute of Public Health\n\nHans-Aloys Wischmann"
-date:     "March 12th, 2026"
+date:     "July 2nd, 2026"
 output:   word_document
 ---
 
@@ -38,11 +38,11 @@ output:   word_document
 The study population has been described in detail elsewhere [Huijbers, 2025, https://www.nature.com/articles/s41598-026-35640-0]: It consisted of persons who self-enrolled online between `r gsub(" .*", "", min(xpresso_raw$test_date_time))` and `r gsub(" .*", "", max(xpresso_raw$test_date_time))`, and who subsequently took the XpressO test, either in a web browser, or in an application that they downloaded and installed onto a personal device. All participants consented electronically to the use of their anonymized data for research and development purposes. Neither (clinical) diagnoses regarding the cognitive status nor scores from (supervised) cognitive screening tests were available for the participants.
 
 ```{r clean_data}
-  # analyse only male and female participants
+  # analyze only male and female participants
   issues_sex  <- xpresso_raw %>% filter(session_number == 1, is.na(sex))
   xpresso_raw <- xpresso_raw %>% filter(!xid %in% issues_sex$xid)
 
-  # analyse only participants up to maximum age threshold
+  # analyze only participants up to maximum age threshold
   issues_age  <- xpresso_raw %>% filter(session_number == 1, age > age_max)
   xpresso_raw <- xpresso_raw %>% filter(!xid %in% issues_age$xid)
 
@@ -54,25 +54,29 @@ The study population has been described in detail elsewhere [Huijbers, 2025, htt
   issues_1st  <- xpresso_raw %>% group_by(xid) %>% reframe(session_number_min = min(session_number)) %>% filter(session_number_min > 1)
   xpresso_raw <- xpresso_raw %>% filter(!xid %in% issues_1st$xid)
 
-  # analyse only complete cases (assuming MCAR)
+  # eliminate participants with differing education levels (between sessions)
+  issues_dif  <- xpresso_raw %>% group_by(xid) %>% reframe(n = length(unique(edu_level))) %>% filter(n != 1)
+  xpresso_raw <- xpresso_raw %>% filter(!xid %in% issues_dif$xid)
+
+  # analyze only complete cases (assuming MCAR)
   issues_cmp  <- xpresso_raw %>% filter(!complete.cases(.))
   xpresso_raw <- xpresso_raw %>% filter(complete.cases(.))
-  
+
   # categorize XpressO scores
   xpresso_raw <- xpresso_raw %>%
     mutate(xpresso_score_level = case_when(xpresso_score <= 42 ~ "Low",
                                            xpresso_score >= 72 ~ "High",
-                                           TRUE               ~ "Intermediate")) %>%
+                                           TRUE                ~ "Intermediate")) %>%
     mutate(xpresso_score_level = factor(xpresso_score_level, levels = c("Low", "Intermediate", "High")))
 
   # create a grid for prediction and visualization
-  xpresso_grid <- expand.grid(sex                 = levels(xpresso_raw$sex),
-                              age                 = 40:max(xpresso_raw$age),
-                              edu_level           = levels(xpresso_raw$edu_level),
-                              status              = c("ML_CN", "ML_CI"))
+  xpresso_grid <- expand.grid(sex       = levels(xpresso_raw$sex),
+                              age       = 40:max(xpresso_raw$age),
+                              edu_level = levels(xpresso_raw$edu_level),
+                              status    = c("ML_CN", "ML_CI"))
 ```
 
-Exclusions(sex): `r nrow(issues_sex)`, exclusions(edu): `r nrow(issues_edu)`, exclusions(age > `r age_max`): `r nrow(issues_age)`, exclusions(missing): `r nrow(issues_1st)`,  exclusions(incomplete): `r nrow(issues_cmp)`. Years of education were categorized into `r paste(edu_year_labels, collapse = ", ")` using cutoffs of `r paste(edu_year_breaks[2:(length(edu_year_breaks) - 1)], collapse = ", ")` years.
+Exclusions(sex): `r nrow(issues_sex)`, exclusions(edu): `r nrow(issues_edu)`, exclusions(age > `r age_max`): `r nrow(issues_age)`, exclusions(missing_1st): `r nrow(issues_1st)`, exclusions(differing_edu): `r nrow(issues_dif)`, exclusions(incomplete): `r nrow(issues_cmp)`. Years of education were categorized into `r paste(edu_year_labels, collapse = ", ")` using cutoffs of `r paste(edu_year_breaks[2:(length(edu_year_breaks) - 1)], collapse = ", ")` years.
 
 ## Odds Ratios (ORs) for same-day and multi-week retest
 
@@ -113,13 +117,28 @@ Exclusions(sex): `r nrow(issues_sex)`, exclusions(edu): `r nrow(issues_edu)`, ex
     mutate(ipw_0d = 1.0 / predict(glm_0d, type = "response"), ipw_2w = 1.0 / predict(glm_2w, type = "response")) %>%
     select(xid, ipw_0d, ipw_2w)
   xpresso_raw <- left_join(xpresso_raw, ipw_df, by = "xid")
+  
+  # perform and document fit diagnostics for IPW
+  print("Checking IPW: Variance Inflation Factors (VIFs), should all be <5 as a rule-of-thumb, glm_0d and glm_2w")
+  print(vif(glm_0d))
+  print(vif(glm_2w))
+  print("Checking IPW: Deciles (QQ), glm_0d and glm_2w")
+  fit_df %>% mutate(p = predict(glm_0d, type = "response"), decile = ntile(p, 10)) %>%
+    group_by(decile) %>% reframe(p = mean(p), o = mean(same_day_return)) %>%
+    ggplot(aes(x = o, y = p)) + geom_point() + geom_abline(slope = 1, intercept = 0) + labs(x = "Observed", y = "Predicted", title = "Deciles: Same Day")
+  fit_df %>% mutate(p = predict(glm_2w, type = "response"), decile = ntile(p, 10)) %>%
+    group_by(decile) %>% reframe(p = mean(p), o = mean(multi_week_return)) %>%
+    ggplot(aes(x = o, y = p)) + geom_point() + geom_abline(slope = 1, intercept = 0) + labs(x = "Observed", y = "Predicted", title = "Deciles: 2-6 Weeks")
+  print("Checking IPW: Area Under the Curve (AUC), should all be as close to 1 as possible, glm_0d and glm_2w")
+  print(auc(roc(fit_df$same_day_return,   predict(glm_0d, type = "response"), quiet = TRUE)))
+  print(auc(roc(fit_df$multi_week_return, predict(glm_2w, type = "response"), quiet = TRUE)))
 ```
 
 Overall, the probability to return for at least one additional test on the day of the initial test was `r sprintf("%.01f%%", 100.0 * nrow(xpresso_0d) / length(unique(xpresso_raw$xid)))`, but only `r sprintf("%.01f%%", 100.0 * nrow(xpresso_2w) / length(unique(xpresso_raw$xid)))` for at least one additional test after a gap of 14 to 42 days.
 
 ## Structural Equation Modeling (SEM) of cognitive domains
 
-First, cognitive status for the overall study population was estimated on a continuous scale in a Structural Equation Model (SEM), based on observed item counts and question time metrics from the XpressO test, separately for the memory tasks and the logical tasks. Baseline status was estimated as two distinct but potentially correlated, unobserved, latent continuous variables, using data from the initial session only. Regressions were added for all metrics as a function of sex (dichotomous, converted to integer), age (continuous), and education level (ordinal, i.e., ordered categorical, converted to integer), and for the number of correct items and the question times, as a function of the number of items placed. The SEM specification is documented in the Supplementary Materials. Weighting (IPW) was not performed, as the initial session of all participants was analysed.
+First, cognitive status for the overall study population are estimated on a continuous scale in a Structural Equation Model (SEM), based on observed item counts and question time metrics from the XpressO test, separately for the memory tasks and the logical tasks. Baseline status is estimated as two distinct but potentially correlated, unobserved, latent continuous variables, using data from the initial session only. Regressions are added for all metrics as a function of sex (dichotomous, converted to integer), age (continuous), and education level (ordinal, i.e., ordered categorical, converted to integer), and for the number of correct items and the question times, as a function of the number of items placed. Weighting (IPW) is not performed, as the initial session of all participants is analyzed.
 
 ```{r SEM}
   # SEM, indicator/measurement variables, covariates sex, age, and education level
@@ -156,9 +175,9 @@ First, cognitive status for the overall study population was estimated on a cont
 
 ## Gaussian Mixture Modeling (GMM) for cognitive status
 
-Subsequently, cognitive status for the overall study population was estimated as a latent categorical variable in a Gaussian Mixture Model (GMM), based on the observed metrics from the XpressO test plus the two latent continuous cognitive status variables computed in the first step, using the SEM. Using the R package MoEclust, influences of the covariates sex, age, and education level on the indicator variables and on the probability density were included. Models of type = “VVV” with 3 classes were computed, to separate a presumably cognitively normal sub-population from a probably cognitively impaired sub-population, while allowing for a third class, e.g., with intermediate or vastly superior cognitive performance.
+Subsequently, cognitive status for the overall study population is estimated as a latent categorical variable in a Gaussian Mixture Model (GMM), based on the observed metrics from the XpressO test plus the two latent continuous cognitive status variables computed in the first step, using the SEM. Using the R package MoEclust, influences of the covariates sex, age, and education level on the indicator variables and on the probability density are included. Models with 3 classes are computed, to separate a presumably cognitively normal sub-population from a probably cognitively impaired sub-population, while allowing for a third class, e.g., with intermediate or vastly superior cognitive performance.
 
-Participants were tentatively classified as cognitively impaired (ML_CI), by this SEM-GMM unsupervised machine learning approach, when they were categorized into the lowest memory performance class or into the lowest logical performance class, and otherwise as cognitively normal (ML_CN).
+Participants are tentatively classified as cognitively impaired (ML_CI), by this SEM-GMM unsupervised machine learning approach, when they are categorized into the lowest memory performance class or into the lowest logical performance class, and otherwise as cognitively normal (ML_CN).
 
 ```{r GMM}
   # Gaussian Mixture Modeling for logical status, with metrics and covariates, three clusters
@@ -170,7 +189,10 @@ Participants were tentatively classified as cognitively impaired (ML_CI), by thi
            imputed_logical_status, age, sex, edu = edu_level, xid)
   gmm_log <- MoE_clust(data         = metrics_covariates %>% select(-age, -sex, -edu, -xid),
                        network.data = metrics_covariates %>% select( age,  sex,  edu),
-                       gating = ~age + sex + edu, expert = ~age + sex + edu, modelNames = "VVV", G = 3)
+                       gating       = ~age + sex + edu,
+                       expert       = ~age + sex + edu, G = 3)
+  print(summary(gmm_log))
+  print(gmm_log$BIC)
 
   # sort clusters by ascending status
   log_class <- metrics_covariates %>% mutate(log_class = gmm_log$classification) %>%
@@ -187,7 +209,10 @@ Participants were tentatively classified as cognitively impaired (ML_CI), by thi
            imputed_memory_status, age, sex, edu = edu_level, xid)
   gmm_mem <- MoE_clust(data         = metrics_covariates %>% select(-age, -sex, -edu, -xid),
                        network.data = metrics_covariates %>% select( age,  sex,  edu),
-                       gating = ~age + sex + edu, expert = ~age + sex + edu, modelNames = "VVV", G = 3)
+                       gating       = ~age + sex + edu,
+                       expert       = ~age + sex + edu, G = 3)
+  print(summary(gmm_mem))
+  print(gmm_mem$BIC)
 
   # sort clusters by ascending status
   mem_class <- metrics_covariates %>% mutate(mem_class = gmm_mem$classification) %>%
@@ -257,7 +282,7 @@ Participants were tentatively classified as cognitively impaired (ML_CI), by thi
 
 ## Prevalence of cognitive impairment, by age, sex, and education level
 
-We assessed the prevalence of presumed cognitive impairment in the overall study population based on this imputed classification, using a generalised additive logistic regression model (GAM) from the R package mgcv, to create prevalence estimates stratified by sex and education level, with a smooth dependency on age, by sex and education level.
+The prevalence of presumed cognitive impairment is assessed in the overall study population based on the imputed classification, using a generalized additive logistic regression model (GAM) from the R package mgcv, to create prevalence estimates stratified by sex and education level, with a smooth dependency on age, by sex and education level.
 
 ```{r prevalence_impairment}
   # logistic regression GAM model for probability of cognitive impairment
@@ -278,7 +303,7 @@ We assessed the prevalence of presumed cognitive impairment in the overall study
 
 ## GAMs for XpressO scores
 
-We subsequently leveraged the imputed cognitive classification to analyse the XpressO scores across all participants as a function of age, sex, education level, and tentative cognitive status, both to inspect the relationship between the imputed classification and the XpressO scores, and to create insights into the dependency of the XpressO scores on the demographic covariates. Here, we used another GAM to create a quantitative synopsis of the XpressO scores, for the initial session, again allowing for a smooth dependency on age, by sex, education level, and cognitive status. The parametric coefficients were used to quantify baseline XpressO score differences in the study population, i.e., offsets, for all education levels compared to primary education and for women compared to men.
+The imputed cognitive classification is subsequently leveraged to analyze the XpressO scores across all participants as a function of age, sex, education level, and tentative cognitive status, both to inspect the relationship between the imputed classification and the XpressO scores, and to create insights into the dependency of the XpressO scores on the demographic covariates. Here, we use another GAM to create a quantitative synopsis of the XpressO scores, for the initial session, again allowing for a smooth dependency on age, by sex, education level, and cognitive status. The parametric coefficients are used to quantify baseline XpressO score differences in the study population, i.e., offsets, for all education levels compared to primary education and for women compared to men.
 
 ```{r XpressO_GAM}
   gam2  <- bam(xpresso_score ~ sex + edu_level + status + s(age, k = 4, by = interaction(sex, edu_level, status)), data = xpresso_raw %>% filter(session_number == 1))
@@ -305,7 +330,7 @@ We subsequently leveraged the imputed cognitive classification to analyse the Xp
 
 ## Practice Effects
 
-Practice effects were defined as the difference in observed metrics between the first completed retest session and the initial session, for each participant. Inverse probability weighting (IPW) was applied to adjust for self-selection bias in the participants’ decisions to retake the test, so as to estimate mean practice effects and standard deviations (SDs) that would have been observed if all participants had returned for both retests. Consequently, a weighted paired two-sample t-test was used to check each metric for significant differences, stratified by the imputed, tentative classification into cognitively normal versus cognitively impaired.
+Practice effects are defined as the difference in observed metrics between the first completed retest session and the initial session, for each participant. Inverse probability weighting (IPW) is applied to adjust for self-selection bias in the participants’ decisions to retake the test, so as to estimate mean practice effects and standard deviations (SDs) that would have been observed if all participants had returned for both retests. Consequently, a weighted paired two-sample t-test is used to check each metric for significant differences, stratified by the imputed, tentative classification into cognitively normal versus cognitively impaired.
 
 ```{r practice_effects}
   # document practice effects for same day and fortnight+ in a single table, stratified by imputed cognitive status at baseline
@@ -314,8 +339,7 @@ Practice effects were defined as the difference in observed metrics between the 
     df %>% select(number_of_prior_sessions = session_number, status, ipw, all_of(data_vars)) %>%
       mutate(n = ifelse(number_of_prior_sessions == 1, "Initial", "Repeat")) %>%
       group_by(status) %>%
-      reframe(across(!c(n, ipw), ~sprintf("%.01f / %s",
-                  wmean(.x[n == "Repeat"] - .x[n == "Initial"], ipw[n == "Initial"]),
+      reframe(across(!c(n, ipw), ~sprintf("%.01f / %s", wmean(.x[n == "Repeat"] - .x[n == "Initial"], ipw[n == "Initial"]),
         format.p(wttest(.x[n == "Repeat"], .x[n == "Initial"], ipw[n == "Initial"]))))) %>%
       select(ends_with("_time"), starts_with("sum_"), everything()) %>%
       pivot_longer(!status, names_to = "Metric") %>%
@@ -328,6 +352,14 @@ Practice effects were defined as the difference in observed metrics between the 
     mutate(across(!Metric, ~ifelse(Metric == "number of prior sessions", gsub("[)].*$", ")", .x), .x))) %>%
     flextable() %>%
       set_caption("Table 2: Practice effects showing IPW-weighted mean difference, (IPW-weighted SD), and p-value from IPW-weighted two-sample paired t.test") %>%
+      add_header_row(values = c("", "Impaired (ML_CI)", "Normal (ML_CN)"), colwidths = c(1, 2, 2)) %>%
+      hline(i = c(1, 3, 6, 9))
+  left_join(practice_effect_stratified(xpresso_raw_0d %>% filter(edu_level != "Primary") %>% rename(ipw = ipw_0d)),
+            practice_effect_stratified(xpresso_raw_2w %>% filter(edu_level != "Primary") %>% rename(ipw = ipw_2w)), by = "Metric", suffix = c(" (1d)", " (2w)")) %>%
+    select(Metric, "Same-Day" = "ML_CI (1d)", "Fortnight+" = "ML_CI (2w)", " Same-Day " = "ML_CN (1d)", " Fortnight+ " = "ML_CN (2w)") %>%
+    mutate(across(!Metric, ~ifelse(Metric == "number of prior sessions", gsub("[)].*$", ")", .x), .x))) %>%
+    flextable() %>%
+      set_caption("Table S3: Practice effects as in Table 2, but excluding subjects with primary education") %>%
       add_header_row(values = c("", "Impaired (ML_CI)", "Normal (ML_CN)"), colwidths = c(1, 2, 2)) %>%
       hline(i = c(1, 3, 6, 9))
 ```
@@ -435,7 +467,7 @@ AUC(initial): `r round(as.double(roc_1$auc), 3)`, AUC(same-day retests): `r roun
 
 ```{r citations}
   R.version.string
-  for (pack in c("MoEClust", "mgcv")) {
+  for (pack in c("MoEClust", "lavaan", "mgcv")) {
     print(citation(pack), bibtex = TRUE)
   }
 ```

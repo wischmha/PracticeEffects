@@ -1,7 +1,7 @@
   # Charité - Universitätsmedizin Berlin
   # Institute of Public Health
   # Hans-Aloys Wischmann
-  # March 10th, 2026
+  # July 2nd, 2026
 
   # ensure consistency across systems
   Sys.setlocale("LC_ALL", 'en_US.UTF-8')
@@ -22,6 +22,7 @@
   library(ggh4x)
   library(pROC)
   library(mgcv)
+  library(car)
 
   # utility to format a p.value
   format.p <- function(p) {
